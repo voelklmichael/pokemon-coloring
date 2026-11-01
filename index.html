@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pokémon Coloring Cards</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🖍️</text></svg>" />
+  </head>
+  <body>
+    <header>
+      <h1>Pokémon Coloring Cards</h1>
+      <p>Turn trading card images into black-and-white cards to print and color.</p>
+    </header>
+
+    <main>
+      <section class="panel" id="import">
+        <h2><span class="step">1</span> Add cards</h2>
+        <div id="dropzone" tabindex="0">
+          <p>
+            Drop card images here, or
+            <label class="button">choose files<input id="file-input" type="file" accept="image/*" multiple hidden /></label>
+          </p>
+          <p class="hint">
+            Tip: in another tab, right-click a card image → <em>Copy image</em>, then press <kbd>Ctrl</kbd>+<kbd>V</kbd> on this page.
+          </p>
+        </div>
+        <label for="url-input">Image links (one per line)</label>
+        <textarea id="url-input" rows="3" placeholder="https://images.pokemontcg.io/sv1/1_hires.png"></textarea>
+        <button id="url-add" class="button">Add from links</button>
+        <details>
+          <summary>Advanced: CORS proxy</summary>
+          <p class="hint">
+            Some websites block loading their images from other pages. A proxy can work around that.
+            Use <code>{url}</code> as placeholder, e.g. <code>https://my-proxy.example/?url={url}</code>.
+          </p>
+          <input id="proxy-input" type="url" placeholder="https://my-proxy.example/?url={url}" />
+        </details>
+        <ul id="messages" aria-live="polite"></ul>
+      </section>
+
+      <section class="panel" id="settings">
+        <h2><span class="step">2</span> Adjust lines</h2>
+        <div class="presets">
+          <button class="button" data-preset="simple">Simple</button>
+          <button class="button" data-preset="detailed">Detailed</button>
+          <button class="button" data-preset="thick">Extra thick</button>
+        </div>
+        <div class="sliders">
+          <label>Smoothing <input type="range" data-setting="blur" min="0" max="5" step="1" /><output></output></label>
+          <label>Detail <input type="range" data-setting="detail" min="1" max="20" step="1" /><output></output></label>
+          <label>Remove specks <input type="range" data-setting="minSpeckle" min="0" max="300" step="10" /><output></output></label>
+          <label>Line width <input type="range" data-setting="lineWidth" min="1" max="11" step="2" /><output></output></label>
+        </div>
+        <label class="inline">
+          <input type="checkbox" id="hide-text" /> Remove card text (leaves empty boxes)
+        </label>
+      </section>
+
+      <section class="panel" id="cards">
+        <h2><span class="step">3</span> Cards <span id="card-count" class="count"></span></h2>
+        <p id="empty-hint" class="hint">No cards yet — add some above.</p>
+        <div id="card-grid"></div>
+      </section>
+
+      <section class="panel" id="print">
+        <h2><span class="step">4</span> Print</h2>
+        <div class="row">
+          <label>Paper
+            <select id="paper">
+              <option value="a4">A4</option>
+              <option value="letter">US Letter</option>
+            </select>
+          </label>
+          <label>Gap between cards (mm) <input id="gap" type="number" min="0" max="10" step="1" /></label>
+          <label class="inline"><input id="cut-lines" type="checkbox" /> Cut lines</label>
+        </div>
+        <button id="download" class="button primary">Download PDF</button>
+        <p class="hint">
+          Print at <strong>100% / “Actual size”</strong>, not “Fit to page”, so the cards come out at real size (63 × 88 mm).
+        </p>
+      </section>
+    </main>
+
+    <footer>
+      <p>
+        Everything runs in your browser; images are not uploaded anywhere.
+        Pokémon and card images are © Nintendo / Creatures / GAME FREAK / The Pokémon Company — for private use only.
+      </p>
+    </footer>
+
+    <template id="card-template">
+      <article class="card">
+        <div class="card-images">
+          <canvas class="original" title="Original"></canvas>
+          <canvas class="lineart" title="Coloring version"></canvas>
+        </div>
+        <div class="card-meta">
+          <span class="card-name"></span>
+          <label>Copies <input class="copies" type="number" min="0" max="18" value="1" /></label>
+          <button class="remove" title="Remove card" aria-label="Remove card">✕</button>
+        </div>
+      </article>
+    </template>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
