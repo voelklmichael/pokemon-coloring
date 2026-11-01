@@ -3,9 +3,10 @@ import { fetchDatabaseCard, parseDatabaseUrl, searchCards, type DatabaseRef, typ
 import { findArtRect, type Rect } from './detect';
 import { decodeImage, fetchImage, nameFromUrl, parseUrls } from './import';
 import { DEFAULT_LINE_ART, PRESETS, type LineArtSettings, type PresetName } from './lineart';
+import type { BackgroundMode } from './mask';
 import { normalizeCard } from './normalize';
 import { buildPdf, type Paper } from './pdf';
-import { renderCard, type LayoutMode } from './render';
+import { artImage, renderCard, type LayoutMode } from './render';
 import {
   costToLetters,
   DEFAULT_STRUCTURE,
@@ -19,6 +20,7 @@ import {
 interface Settings {
   lineArt: LineArtSettings;
   layout: LayoutMode;
+  background: BackgroundMode;
   paper: Paper;
   gap: number;
   cutLines: boolean;
@@ -35,6 +37,8 @@ interface Card {
   art: Rect;
   structure: CardStructure;
   structureSource: StructureSource;
+  /** Pokémon mask of the artwork; computed on demand when the background isn't kept. */
+  foreground?: Uint8Array;
   output: HTMLCanvasElement;
   copies: number;
   el: HTMLElement;
@@ -43,6 +47,7 @@ interface Card {
 const DEFAULT_SETTINGS: Settings = {
   lineArt: DEFAULT_LINE_ART,
   layout: 'template',
+  background: 'fade',
   paper: 'a4',
   gap: 2,
   cutLines: true,
@@ -99,7 +104,49 @@ function notify(text: string, kind: 'error' | 'info' = 'error') {
 // ---------- cards ----------
 
 function render(card: Card) {
-  renderCard(card.output, card, settings.lineArt, settings.layout);
+  renderCard(card.output, card, settings.lineArt, settings.layout, settings.background);
+}
+
+// ---------- background removal ----------
+
+let maskQueue: Card[] = [];
+let maskRunning = false;
+let maskFailed = false;
+
+/** Read through a function: the setting can change while masks are computed. */
+const masksWanted = () => settings.background !== 'keep' && !maskFailed;
+
+function setBackgroundStatus(text: string) {
+  $('#background-status').textContent = text;
+}
+
+/** Finds the Pokémon in each card's artwork, one card at a time, and re-renders it. */
+async function computeMasks(newCards: Card[]) {
+  if (!masksWanted()) return;
+  maskQueue.push(...newCards.filter((c) => !c.foreground && !maskQueue.includes(c)));
+  if (maskRunning) return;
+  maskRunning = true;
+  try {
+    // Loaded on first use: the model runtime is large and not needed with "keep".
+    const { foregroundMask } = await import('./segment');
+    let done = 0;
+    while (maskQueue.length && masksWanted()) {
+      setBackgroundStatus(`Finding the Pokémon… ${done + 1}/${done + maskQueue.length}`);
+      const card = maskQueue.shift()!;
+      if (!cards.includes(card)) continue;
+      card.foreground = await foregroundMask(artImage(card.source, card.art));
+      done++;
+      render(card);
+    }
+    setBackgroundStatus('');
+  } catch (err) {
+    maskFailed = true;
+    maskQueue = [];
+    setBackgroundStatus('');
+    notify(`Background removal is not available in this browser: ${(err as Error).message}`);
+  } finally {
+    maskRunning = false;
+  }
 }
 
 function updateCount() {
@@ -207,6 +254,7 @@ function addCard(bitmap: ImageBitmap, name: string, structure: CardStructure | n
   cards.push(card);
   $('#card-grid').append(el);
   updateCount();
+  computeMasks([card]);
 }
 
 async function addFromBlob(blob: Blob, name: string, structure: CardStructure | null = null) {
@@ -401,6 +449,7 @@ function syncSettingsUi() {
     slider.nextElementSibling!.textContent = slider.value;
   }
   $<HTMLSelectElement>('#layout-mode').value = settings.layout;
+  $<HTMLSelectElement>('#background').value = settings.background;
 }
 
 for (const slider of sliders) {
@@ -425,6 +474,13 @@ $<HTMLSelectElement>('#layout-mode').onchange = (e) => {
   settings.layout = (e.target as HTMLSelectElement).value as LayoutMode;
   saveSettings();
   scheduleRerender();
+};
+
+$<HTMLSelectElement>('#background').onchange = (e) => {
+  settings.background = (e.target as HTMLSelectElement).value as BackgroundMode;
+  saveSettings();
+  scheduleRerender();
+  computeMasks(cards);
 };
 
 // ---------- print wiring ----------

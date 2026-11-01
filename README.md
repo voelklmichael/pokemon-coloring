@@ -31,3 +31,7 @@ Deployment: pushing to `main` runs [.github/workflows/deploy.yml](.github/workfl
 One-time setup: repository Settings → Pages → Source: **GitHub Actions**.
 
 See [docs/PLAN.md](docs/PLAN.md) for the design and roadmap.
+
+Background removal uses the [U²-Net-p](https://github.com/xuebinqin/U-2-Net) model
+(Apache-2.0), bundled as `public/models/u2netp.onnx`. Test-set and model-evaluation
+scripts are in [scripts/](scripts/), see [docs/BACKGROUND_REMOVAL.md](docs/BACKGROUND_REMOVAL.md).
