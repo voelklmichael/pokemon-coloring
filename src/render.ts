@@ -1,5 +1,6 @@
 import type { Rect } from './detect';
 import { lineArt, type LineArtSettings } from './lineart';
+import { artLineArt, type BackgroundMode } from './mask';
 import type { CardStructure } from './structure';
 import { ART_FRAME, CARD_H, CARD_W, drawTemplate } from './template';
 
@@ -11,6 +12,8 @@ export interface RenderInput {
   source: HTMLCanvasElement;
   art: Rect;
   structure: CardStructure;
+  /** Pokémon mask of the artwork (ART_FRAME size, from `artImage`), once computed. */
+  foreground?: Uint8Array;
 }
 
 function maskToImageData(mask: Uint8Array, w: number, h: number): ImageData {
@@ -24,7 +27,7 @@ function maskToImageData(mask: Uint8Array, w: number, h: number): ImageData {
 }
 
 /** Crops the artwork (minus its border) to the frame's aspect ratio and scales it to the frame size. */
-function artImage(source: HTMLCanvasElement, art: Rect): ImageData {
+export function artImage(source: HTMLCanvasElement, art: Rect): ImageData {
   const inset = 5;
   let sx = art.x + inset, sy = art.y + inset, sw = art.w - 2 * inset, sh = art.h - 2 * inset;
   const frameRatio = ART_FRAME.w / ART_FRAME.h;
@@ -46,7 +49,13 @@ function artImage(source: HTMLCanvasElement, art: Rect): ImageData {
   return ctx.getImageData(0, 0, c.width, c.height);
 }
 
-export function renderCard(target: HTMLCanvasElement, input: RenderInput, settings: LineArtSettings, mode: LayoutMode) {
+export function renderCard(
+  target: HTMLCanvasElement,
+  input: RenderInput,
+  settings: LineArtSettings,
+  mode: LayoutMode,
+  background: BackgroundMode = 'keep',
+) {
   target.width = CARD_W;
   target.height = CARD_H;
   const ctx = target.getContext('2d')!;
@@ -58,6 +67,7 @@ export function renderCard(target: HTMLCanvasElement, input: RenderInput, settin
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, CARD_W, CARD_H);
   const art = artImage(input.source, input.art);
-  ctx.putImageData(maskToImageData(lineArt(art, settings), art.width, art.height), ART_FRAME.x, ART_FRAME.y);
+  const lines = artLineArt(art, settings, background, input.foreground);
+  ctx.putImageData(maskToImageData(lines, art.width, art.height), ART_FRAME.x, ART_FRAME.y);
   drawTemplate(ctx, input.structure);
 }

@@ -53,6 +53,9 @@ database covers the use case.
 - **Art window** (`detect.ts`): strongest horizontal/vertical border lines near the
   expected positions, assuming a centered window; falls back to the modern layout's
   window (full-art cards have none).
+- **Background** (`segment.ts`, `mask.ts`): U²-Net-p (ONNX, in a Web Worker) finds the
+  Pokémon in the art crop; the background is kept, drawn with fewer lines, or removed.
+  See [BACKGROUND_REMOVAL.md](BACKGROUND_REMOVAL.md).
 - **Line art** (`lineart.ts`), on the art crop only so thresholds adapt to the artwork:
   1. per-channel blur (R, G, B)
   2. Sobel per channel, strongest channel wins (finds borders between colors of equal brightness)
@@ -87,6 +90,8 @@ src/
 ├─ lineart.ts     image → line-art mask
 ├─ template.ts    base layout drawing, energy icons
 ├─ render.ts      combines art line art + template per card
+├─ segment.ts     background removal: U²-Net-p model via onnxruntime-web (+ segment.worker.ts)
+├─ mask.ts        mask postprocessing, background modes for the line art
 ├─ pdf.ts         page layout, jsPDF export
 └─ style.css
 test/             vitest unit tests
