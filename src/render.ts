@@ -14,12 +14,15 @@ export interface RenderInput {
   structure: CardStructure;
   /** Pokémon mask of the artwork (ART_FRAME size, from `artImage`), once computed. */
   foreground?: Uint8Array;
+  /** Coloring-book line art of the Pokémon (darkness 0..255, ART_FRAME size, from src/coloring.ts), once computed. */
+  coloring?: Uint8Array;
 }
 
-function maskToImageData(mask: Uint8Array, w: number, h: number): ImageData {
+/** Darkness per pixel → gray image; `scale` maps the values to 0..255 (255 for 0/1 masks). */
+function darknessToImageData(dark: Uint8Array, w: number, h: number, scale: number): ImageData {
   const out = new ImageData(w, h);
-  for (let i = 0, p = 0; i < mask.length; i++, p += 4) {
-    const v = mask[i] ? 0 : 255;
+  for (let i = 0, p = 0; i < dark.length; i++, p += 4) {
+    const v = 255 - Math.min(255, dark[i] * scale);
     out.data[p] = out.data[p + 1] = out.data[p + 2] = v;
     out.data[p + 3] = 255;
   }
@@ -61,13 +64,21 @@ export function renderCard(
   const ctx = target.getContext('2d')!;
   if (mode === 'original') {
     const img = input.source.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, CARD_W, CARD_H);
-    ctx.putImageData(maskToImageData(lineArt(img, settings), CARD_W, CARD_H), 0, 0);
+    ctx.putImageData(darknessToImageData(lineArt(img, settings), CARD_W, CARD_H, 255), 0, 0);
     return;
   }
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, CARD_W, CARD_H);
   const art = artImage(input.source, input.art);
   const lines = artLineArt(art, settings, background, input.foreground);
-  ctx.putImageData(maskToImageData(lines, art.width, art.height), ART_FRAME.x, ART_FRAME.y);
+  if (input.coloring && input.foreground && background !== 'keep') {
+    // The Pokémon from the coloring pipeline; outside it the (faded or removed) background.
+    const { coloring, foreground } = input;
+    const dark = new Uint8Array(lines.length);
+    for (let i = 0; i < dark.length; i++) dark[i] = Math.max(coloring[i], foreground[i] ? 0 : lines[i] * 255);
+    ctx.putImageData(darknessToImageData(dark, art.width, art.height, 1), ART_FRAME.x, ART_FRAME.y);
+  } else {
+    ctx.putImageData(darknessToImageData(lines, art.width, art.height, 255), ART_FRAME.x, ART_FRAME.y);
+  }
   drawTemplate(ctx, input.structure);
 }

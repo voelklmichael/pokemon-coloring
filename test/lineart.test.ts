@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { canny, dilate, gradient, lineArt, removeSpeckles, toGray, DEFAULT_LINE_ART, type RgbaImage } from '../src/lineart';
+import {
+  alphaMask, canny, dilate, erode, gradient, lineArt, removeSpeckles, silhouette, toGray, DEFAULT_LINE_ART, type RgbaImage,
+} from '../src/lineart';
 
 /** White image with a black filled rectangle. */
 function rectImage(w: number, h: number, x0: number, y0: number, x1: number, y1: number): RgbaImage {
@@ -14,6 +16,36 @@ function rectImage(w: number, h: number, x0: number, y0: number, x1: number, y1:
 }
 
 const count = (mask: Uint8Array) => mask.reduce((sum, v) => sum + v, 0);
+
+/** Transparent image with an opaque colored disk; `inner` paints a smaller dark disk inside it. */
+function diskImage(w: number, h: number, cx: number, cy: number, r: number, inner = 0): RgbaImage {
+  const data = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const d = Math.hypot(x - cx, y - cy);
+      if (d <= r) data.set(d <= inner ? [30, 30, 30, 255] : [220, 120, 40, 255], (y * w + x) * 4);
+    }
+  }
+  return { width: w, height: h, data };
+}
+
+/** Pixels reachable from `start` without crossing the mask (4-connected). */
+function floodFill(mask: Uint8Array, w: number, h: number, start: number): Uint8Array {
+  const seen = new Uint8Array(w * h);
+  const stack = [start];
+  seen[start] = 1;
+  while (stack.length) {
+    const i = stack.pop()!;
+    const x = i % w;
+    for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, i - w, i + w]) {
+      if (j >= 0 && j < w * h && !seen[j] && !mask[j]) {
+        seen[j] = 1;
+        stack.push(j);
+      }
+    }
+  }
+  return seen;
+}
 
 describe('toGray', () => {
   it('composites transparent pixels onto white', () => {
@@ -72,5 +104,57 @@ describe('lineArt', () => {
     const mask = lineArt(img, { ...DEFAULT_LINE_ART, minSpeckle: 0, lineWidth: 1 });
     expect(mask[20 * w + 19] || mask[20 * w + 20]).toBe(1);
     expect(mask[20 * w + 5]).toBe(0);
+  });
+
+  it('outlines a cut-out shape and keeps details inside it, but not edges next to the outline', () => {
+    const w = 120, h = 120;
+    const s = { ...DEFAULT_LINE_ART, minSpeckle: 0 };
+    const mask = lineArt(diskImage(w, h, 60, 60, 50, 15), s);
+    expect(floodFill(mask, w, h, 60 * w + 60)[0]).toBe(0); // closed outline
+    expect(mask[60 * w + 45] || mask[60 * w + 44] || mask[60 * w + 46]).toBe(1); // inner dark disk's edge
+    expect(count(mask.slice(60 * w + 15, 60 * w + 25))).toBe(0); // just inside the outline: empty
+  });
+});
+
+describe('erode', () => {
+  it('shrinks a filled square', () => {
+    const w = 9, h = 9;
+    const mask = new Uint8Array(w * h);
+    for (let y = 2; y < 7; y++) for (let x = 2; x < 7; x++) mask[y * w + x] = 1;
+    const out = erode(mask, w, h, 3);
+    expect(count(out)).toBe(9);
+    expect(out[4 * w + 4]).toBe(1);
+    expect(out[2 * w + 2]).toBe(0);
+  });
+});
+
+describe('alphaMask', () => {
+  it('is null for opaque images', () => {
+    expect(alphaMask(rectImage(4, 4, 1, 1, 3, 3))).toBeNull();
+  });
+
+  it('marks opaque pixels', () => {
+    const fg = alphaMask(diskImage(20, 20, 10, 10, 5))!;
+    expect(fg[10 * 20 + 10]).toBe(1);
+    expect(fg[0]).toBe(0);
+  });
+});
+
+describe('silhouette', () => {
+  it('is a closed ring around the shape', () => {
+    const w = 60, h = 60;
+    const ring = silhouette(alphaMask(diskImage(w, h, 30, 30, 20))!, w, h, 5);
+    expect(ring[30 * w + 30]).toBe(0);
+    expect(ring[30 * w + 10] || ring[30 * w + 11]).toBe(1);
+    expect(floodFill(ring, w, h, 30 * w + 30)[0]).toBe(0);
+  });
+
+  it('does not outline the image border', () => {
+    const w = 40, h = 40;
+    const fg = new Uint8Array(w * h);
+    for (let y = 10; y < 30; y++) for (let x = 0; x < 20; x++) fg[y * w + x] = 1;
+    const ring = silhouette(fg, w, h, 3);
+    expect(ring[20 * w]).toBe(0); // left image border, inside the shape
+    expect(ring[20 * w + 19] || ring[20 * w + 20]).toBe(1); // right side of the shape
   });
 });

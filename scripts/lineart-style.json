@@ -1,0 +1,210 @@
+{
+ "xy11-55": {
+  "ink": 0.0229,
+  "style": "soft"
+ },
+ "pl1-80": {
+  "ink": 0.0,
+  "style": "soft"
+ },
+ "ecard2-69": {
+  "ink": 0.0024,
+  "style": "soft"
+ },
+ "sv03.5-114": {
+  "ink": 0.1166,
+  "style": "inked"
+ },
+ "base3-24": {
+  "ink": 0.0725,
+  "style": "inked"
+ },
+ "sv03.5-025": {
+  "ink": 0.0137,
+  "style": "soft"
+ },
+ "sm3-105": {
+  "ink": 0.0731,
+  "style": "inked"
+ },
+ "neo2-56": {
+  "ink": 0.0013,
+  "style": "soft"
+ },
+ "base1-55": {
+  "ink": 0.0575,
+  "style": "inked"
+ },
+ "base2-25": {
+  "ink": 0.0634,
+  "style": "inked"
+ },
+ "lc-48": {
+  "ink": 0.0377,
+  "style": "soft"
+ },
+ "bw3-80": {
+  "ink": 0.0121,
+  "style": "soft"
+ },
+ "hgss1-27": {
+  "ink": 0.0106,
+  "style": "soft"
+ },
+ "base4-90": {
+  "ink": 0.0206,
+  "style": "soft"
+ },
+ "base3-21": {
+  "ink": 0.0251,
+  "style": "soft"
+ },
+ "lc-59": {
+  "ink": 0.1076,
+  "style": "inked"
+ },
+ "pl4-18": {
+  "ink": 0.0258,
+  "style": "soft"
+ },
+ "dp2-105": {
+  "ink": 0.0017,
+  "style": "soft"
+ },
+ "sv09-020": {
+  "ink": 0.0121,
+  "style": "soft"
+ },
+ "sv10-037": {
+  "ink": 0.1069,
+  "style": "inked"
+ },
+ "hgss1-33": {
+  "ink": 0.0696,
+  "style": "inked"
+ },
+ "col1-SL6": {
+  "ink": 0.0057,
+  "style": "soft"
+ },
+ "base2-56": {
+  "ink": 0.1254,
+  "style": "inked"
+ },
+ "swsh8-204": {
+  "ink": 0.0612,
+  "style": "inked"
+ },
+ "hgss4-25": {
+  "ink": 0.013,
+  "style": "soft"
+ },
+ "base1-11": {
+  "ink": 0.1123,
+  "style": "inked"
+ },
+ "g1-22": {
+  "ink": 0.0094,
+  "style": "soft"
+ },
+ "ex2-29": {
+  "ink": 0.0101,
+  "style": "soft"
+ },
+ "ex14-51": {
+  "ink": 0.0292,
+  "style": "soft"
+ },
+ "dp7-54": {
+  "ink": 0.0004,
+  "style": "soft"
+ },
+ "lc-83": {
+  "ink": 0.0607,
+  "style": "inked"
+ },
+ "hgss1-47": {
+  "ink": 0.0102,
+  "style": "soft"
+ },
+ "xy0-17": {
+  "ink": 0.0283,
+  "style": "soft"
+ },
+ "gym1-22": {
+  "ink": 0.0657,
+  "style": "inked"
+ },
+ "gym2-37": {
+  "ink": 0.0684,
+  "style": "inked"
+ },
+ "pop4-11": {
+  "ink": 0.0659,
+  "style": "inked"
+ },
+ "xy9-123": {
+  "ink": 0.0117,
+  "style": "soft"
+ },
+ "ecard2-48": {
+  "ink": 0.0039,
+  "style": "soft"
+ },
+ "gym2-5": {
+  "ink": 0.1029,
+  "style": "inked"
+ },
+ "col1-74": {
+  "ink": 0.0917,
+  "style": "inked"
+ },
+ "gym2-64": {
+  "ink": 0.0262,
+  "style": "soft"
+ },
+ "ecard3-67": {
+  "ink": 0.0032,
+  "style": "soft"
+ },
+ "pl3-126": {
+  "ink": 0.0232,
+  "style": "soft"
+ },
+ "A4-229": {
+  "ink": 0.1837,
+  "style": "inked"
+ },
+ "bw1-17": {
+  "ink": 0.0069,
+  "style": "soft"
+ },
+ "pop5-13": {
+  "ink": 0.0013,
+  "style": "soft"
+ },
+ "ex3-16": {
+  "ink": 0.0508,
+  "style": "inked"
+ },
+ "sm5-78": {
+  "ink": 0.0067,
+  "style": "soft"
+ },
+ "neo2-45": {
+  "ink": 0.3792,
+  "style": "inked"
+ },
+ "gym1-71": {
+  "ink": 0.0849,
+  "style": "inked"
+ },
+ "col1-2": {
+  "ink": 0.0192,
+  "style": "soft"
+ },
+ "pop7-9": {
+  "ink": 0.0124,
+  "style": "soft"
+ }
+}

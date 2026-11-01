@@ -3,6 +3,8 @@ import { fetchDatabaseCard, parseDatabaseUrl, searchCards, type DatabaseRef, typ
 import { findArtRect, type Rect } from './detect';
 import { decodeImage, fetchImage, nameFromUrl, parseUrls } from './import';
 import { DEFAULT_LINE_ART, PRESETS, type LineArtSettings, type PresetName } from './lineart';
+import { analyzeArt } from './coloring-client';
+import { coloringParams, INKED_MIN } from './coloring';
 import type { BackgroundMode } from './mask';
 import { normalizeCard } from './normalize';
 import { buildPdf, type Paper } from './pdf';
@@ -21,6 +23,8 @@ interface Settings {
   lineArt: LineArtSettings;
   layout: LayoutMode;
   background: BackgroundMode;
+  /** Hide cards whose art is soft painted (no drawn lines): it doesn't give clean coloring lines. */
+  hidePainted: boolean;
   paper: Paper;
   gap: number;
   cutLines: boolean;
@@ -39,6 +43,10 @@ interface Card {
   structureSource: StructureSource;
   /** Pokémon mask of the artwork; computed on demand when the background isn't kept. */
   foreground?: Uint8Array;
+  /** Share of the Pokémon covered by ink lines (from the mask); below INKED_MIN the art is soft painted. */
+  inkScore?: number;
+  /** Coloring-book line art of the Pokémon, for the line settings in `key`. */
+  coloring?: { key: string; lines: Uint8Array };
   output: HTMLCanvasElement;
   copies: number;
   el: HTMLElement;
@@ -48,6 +56,7 @@ const DEFAULT_SETTINGS: Settings = {
   lineArt: DEFAULT_LINE_ART,
   layout: 'template',
   background: 'fade',
+  hidePainted: true,
   paper: 'a4',
   gap: 2,
   cutLines: true,
@@ -104,7 +113,25 @@ function notify(text: string, kind: 'error' | 'info' = 'error') {
 // ---------- cards ----------
 
 function render(card: Card) {
-  renderCard(card.output, card, settings.lineArt, settings.layout, settings.background);
+  const coloring = wantsColoring(card) ? card.coloring?.lines : undefined;
+  renderCard(card.output, { ...card, coloring }, settings.lineArt, settings.layout, settings.background);
+  // Until the lines for the current settings are ready, the previous ones are shown.
+  if (wantsColoring(card) && card.coloring?.key !== coloringKey()) computeColoring([card]);
+}
+
+const isPainted = (card: Card) => card.inkScore !== undefined && card.inkScore < INKED_MIN;
+const isHidden = (card: Card) => settings.hidePainted && isPainted(card);
+const visibleCards = () => cards.filter((c) => !isHidden(c));
+
+function updateVisibility() {
+  for (const card of cards) card.el.hidden = isHidden(card);
+  const hidden = cards.filter(isPainted).length;
+  $('#painted-status').textContent = !hidden
+    ? ''
+    : settings.hidePainted
+      ? `${hidden} card${hidden > 1 ? 's' : ''} hidden: painted art doesn’t give clean coloring lines.`
+      : `${hidden} card${hidden > 1 ? 's have' : ' has'} painted art: the lines may come out messy.`;
+  updateCount();
 }
 
 // ---------- background removal ----------
@@ -114,7 +141,7 @@ let maskRunning = false;
 let maskFailed = false;
 
 /** Read through a function: the setting can change while masks are computed. */
-const masksWanted = () => settings.background !== 'keep' && !maskFailed;
+const masksWanted = () => (settings.background !== 'keep' || settings.hidePainted) && !maskFailed;
 
 function setBackgroundStatus(text: string) {
   $('#background-status').textContent = text;
@@ -137,6 +164,7 @@ async function computeMasks(newCards: Card[]) {
       card.foreground = await foregroundMask(artImage(card.source, card.art));
       done++;
       render(card);
+      computeColoring([card]);
     }
     setBackgroundStatus('');
   } catch (err) {
@@ -149,9 +177,54 @@ async function computeMasks(newCards: Card[]) {
   }
 }
 
+// ---------- coloring-book line art ----------
+
+let coloringQueue: Card[] = [];
+let coloringRunning = false;
+
+/** The coloring pipeline draws the Pokémon when the background is faded or removed, for inked art only. */
+const wantsColoring = (card: Card) =>
+  settings.layout === 'template' && settings.background !== 'keep' && !!card.foreground && !isPainted(card);
+const coloringKey = () => JSON.stringify(coloringParams(settings.lineArt));
+
+function setColoringStatus(text: string) {
+  $('#coloring-status').textContent = text;
+}
+
+/** Computes each card's ink score (once) and coloring line art (per line settings) in a worker, one card at a time. */
+async function computeColoring(newCards: Card[]) {
+  const needed = (c: Card) => !!c.foreground && (c.inkScore === undefined || (wantsColoring(c) && c.coloring?.key !== coloringKey()));
+  coloringQueue.push(...newCards.filter((c) => needed(c) && !coloringQueue.includes(c)));
+  if (coloringRunning) return;
+  coloringRunning = true;
+  try {
+    while (coloringQueue.length) {
+      setColoringStatus(`Drawing coloring lines… ${coloringQueue.length} left`);
+      const card = coloringQueue.shift()!;
+      if (!cards.includes(card) || !needed(card)) continue;
+      // Lines are computed with the first ink score too: most cards are inked.
+      const key = coloringKey();
+      const linesWanted = settings.layout === 'template' && settings.background !== 'keep' && !isPainted(card);
+      const params = linesWanted ? coloringParams(settings.lineArt) : undefined;
+      const result = await analyzeArt(artImage(card.source, card.art), card.foreground!, params);
+      card.inkScore = result.inkScore;
+      if (result.lines) card.coloring = { key, lines: result.lines };
+      updateVisibility();
+      render(card);
+    }
+  } catch (err) {
+    coloringQueue = [];
+    notify(`Drawing the coloring lines failed: ${(err as Error).message}`);
+  } finally {
+    coloringRunning = false;
+    setColoringStatus('');
+  }
+}
+
 function updateCount() {
-  const total = cards.reduce((sum, c) => sum + c.copies, 0);
-  $('#card-count').textContent = cards.length ? `(${cards.length} cards, ${total} to print)` : '';
+  const shown = visibleCards();
+  const total = shown.reduce((sum, c) => sum + c.copies, 0);
+  $('#card-count').textContent = shown.length ? `(${shown.length} cards, ${total} to print)` : '';
   $('#empty-hint').hidden = cards.length > 0;
 }
 
@@ -246,7 +319,7 @@ function addCard(bitmap: ImageBitmap, name: string, structure: CardStructure | n
   el.querySelector<HTMLButtonElement>('.remove')!.onclick = () => {
     cards.splice(cards.indexOf(card), 1);
     el.remove();
-    updateCount();
+    updateVisibility();
   };
   setupStructureEditor(card);
 
@@ -450,6 +523,7 @@ function syncSettingsUi() {
   }
   $<HTMLSelectElement>('#layout-mode').value = settings.layout;
   $<HTMLSelectElement>('#background').value = settings.background;
+  $<HTMLInputElement>('#hide-painted').checked = settings.hidePainted;
 }
 
 for (const slider of sliders) {
@@ -483,6 +557,13 @@ $<HTMLSelectElement>('#background').onchange = (e) => {
   computeMasks(cards);
 };
 
+$<HTMLInputElement>('#hide-painted').onchange = (e) => {
+  settings.hidePainted = (e.target as HTMLInputElement).checked;
+  saveSettings();
+  updateVisibility();
+  computeMasks(cards);
+};
+
 // ---------- print wiring ----------
 
 const paperSelect = $<HTMLSelectElement>('#paper');
@@ -507,7 +588,7 @@ cutLinesInput.onchange = () => {
 
 $<HTMLButtonElement>('#download').onclick = async (e) => {
   const button = e.currentTarget as HTMLButtonElement;
-  const images = cards.flatMap((card) => {
+  const images = visibleCards().flatMap((card) => {
     if (card.copies === 0) return [];
     const image = { key: `card-${card.id}`, dataUrl: card.output.toDataURL('image/png') };
     return Array<typeof image>(card.copies).fill(image);
