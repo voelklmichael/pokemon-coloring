@@ -32,11 +32,11 @@ One-time setup: repository Settings → Pages → Source: **GitHub Actions**.
 
 See [docs/PLAN.md](docs/PLAN.md) for the design and roadmap.
 
-The card catalog `public/catalog.csv.gz` (names, numbers and structure of all TCGdex cards,
+The card catalog `public/catalog.csv.gz` (names, numbers and structure of all TCGdex Pokémon cards,
 plus a SHA-256 of each card image; no card text or images) is built offline:
 
 ```sh
-npx vite-node scripts/card-urls.ts       # list of all card images
+npx vite-node scripts/card-urls.ts       # list of all Pokémon card images
 npx vite-node scripts/download-cards.ts  # download them to .cache/cards (resumable)
 npx vite-node scripts/build-catalog.ts   # write public/catalog.csv.gz
 ```

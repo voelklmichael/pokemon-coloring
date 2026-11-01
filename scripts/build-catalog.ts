@@ -1,6 +1,6 @@
 // Builds the card catalog (src/catalog.ts) from TCGdex and the images downloaded by
-// scripts/download-cards.ts, sorted like scripts/card-urls.ts (by National Pokédex number,
-// Trainer and Energy cards last). Cards whose image is not downloaded get sha256 null, so
+// scripts/download-cards.ts, sorted like scripts/card-urls.ts (by National Pokédex number).
+// Only Pokémon cards, no Trainer or Energy cards. Cards whose image is not downloaded get sha256 null, so
 // run it again after the download has finished.
 // The catalog is CSV, written gzipped; the app decompresses it.
 // Usage: npx vite-node scripts/build-catalog.ts [cards=.cache/cards] [out=public/catalog.csv.gz]
@@ -36,7 +36,7 @@ const res = await fetch('https://api.tcgdex.net/v2/graphql', {
 if (!res.ok) throw new Error(`${res.status} TCGdex GraphQL`);
 const body = (await res.json()) as { data?: { cards: GqlCard[] }; errors?: { message: string }[] };
 if (!body.data) throw new Error(`TCGdex GraphQL: ${body.errors?.map((e) => e.message).join('; ')}`);
-const all = body.data.cards;
+const all = body.data.cards.filter((c) => c.category === 'Pokemon');
 
 // Same order as scripts/card-urls.ts; cards without image go last within their number.
 const dex = (c: GqlCard) => (c.dexId?.length ? Math.min(...c.dexId) : Infinity);
@@ -49,11 +49,9 @@ all.sort(
 
 if (new Set(all.map((c) => c.id)).size !== all.length) throw new Error('duplicate card ids');
 
-const categories = new Set(['Pokemon', 'Trainer', 'Energy']);
 const cards: CatalogCard[] = [];
 let hashed = 0;
 for (const c of all) {
-  if (!categories.has(c.category)) throw new Error(`${c.id}: unknown category ${c.category}`);
   // File path as written by scripts/card-urls.ts.
   const file = join(cardsDir, c.set.id, `${encodeURIComponent(c.localId)}.png`);
   const bytes = c.image ? await readFile(file).catch(() => null) : null;
@@ -64,10 +62,10 @@ for (const c of all) {
     name: c.name,
     set: c.set.id,
     dex: c.dexId ?? [],
-    category: c.category as CatalogCard['category'],
+    category: 'Pokemon',
     image: c.image,
     sha256,
-    structure: c.category === 'Pokemon' ? structureFromTcgdex(c) : null,
+    structure: structureFromTcgdex(c),
   });
 }
 

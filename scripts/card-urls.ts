@@ -1,5 +1,5 @@
-// Writes the list of all TCGdex card images to download, sorted by National Pokédex
-// number (Kanto first); Trainer and Energy cards come last.
+// Writes the list of all TCGdex Pokémon card images to download (no Trainer or Energy
+// cards), sorted by National Pokédex number (Kanto first).
 // One line per card: <dexId>\t<cardId>\t<image url>\t<file path relative to the list>.
 // Usage: npx vite-node scripts/card-urls.ts [out=.cache/cards/urls.tsv]
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -11,6 +11,7 @@ interface Card {
   id: string;
   localId: string;
   image: string | null;
+  category: string;
   dexId: number[] | null;
   set: { id: string };
 }
@@ -19,11 +20,11 @@ interface Card {
 const res = await fetch('https://api.tcgdex.net/v2/graphql', {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ query: '{ cards { id localId image dexId set { id } } }' }),
+  body: JSON.stringify({ query: '{ cards { id localId image category dexId set { id } } }' }),
 });
 if (!res.ok) throw new Error(`${res.status} TCGdex GraphQL`);
 const all = ((await res.json()) as { data: { cards: Card[] } }).data.cards;
-const cards = all.filter((c) => c.image);
+const cards = all.filter((c) => c.image && c.category === 'Pokemon');
 
 // Cards showing several Pokémon (e.g. Tag Team) sort by their lowest number.
 const dex = (c: Card) => (c.dexId?.length ? Math.min(...c.dexId) : Infinity);
@@ -38,4 +39,4 @@ if (new Set(lines.map((l) => l.split('\t')[3])).size !== lines.length) throw new
 
 await mkdir(dirname(out), { recursive: true });
 await writeFile(out, lines.join('\n') + '\n');
-console.log(`${lines.length} of ${all.length} cards have images; written to ${out}`);
+console.log(`${lines.length} of ${all.length} cards are Pokémon with images; written to ${out}`);
