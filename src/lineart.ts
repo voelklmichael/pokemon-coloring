@@ -242,11 +242,70 @@ export function dilate(mask: Uint8Array, w: number, h: number, width: number): U
   return out;
 }
 
-/** Converts an image to a line-art mask: 1 = black line, 0 = white. */
+/** Shrinks a mask by a disk of the given diameter. */
+export function erode(mask: Uint8Array, w: number, h: number, width: number): Uint8Array {
+  const grown = dilate(mask.map((v) => 1 - v), w, h, width);
+  return grown.map((v) => 1 - v);
+}
+
+/** Foreground mask from the alpha channel (1 = opaque), or null if the image has no transparent pixels. */
+export function alphaMask(img: RgbaImage): Uint8Array | null {
+  const n = img.width * img.height;
+  const fg = new Uint8Array(n);
+  let transparent = false;
+  for (let i = 0; i < n; i++) {
+    if (img.data[i * 4 + 3] >= 128) fg[i] = 1;
+    else transparent = true;
+  }
+  return transparent ? fg : null;
+}
+
+/**
+ * Closed outline around a foreground mask, `width` px wide. The mask is smoothed first, so the
+ * outline doesn't follow its pixel steps. The image border is not outlined: there the Pokémon is
+ * cut off by the art window, whose frame the template draws.
+ */
+export function silhouette(fg: Uint8Array, w: number, h: number, width: number): Uint8Array {
+  const soft = blur(Float32Array.from(fg), w, h, 3);
+  const inside = (i: number) => soft[i] >= 0.5;
+  const edge = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (!inside(i)) continue;
+      if ((x > 0 && !inside(i - 1)) || (x < w - 1 && !inside(i + 1)) || (y > 0 && !inside(i - w)) || (y < h - 1 && !inside(i + w))) {
+        edge[i] = 1;
+      }
+    }
+  }
+  return dilate(edge, w, h, width);
+}
+
+/** Outline width for a given interior line width: a bolder outer line makes the figure read clearly. */
+export const outlineWidth = (lineWidth: number) => lineWidth + 2;
+
+/**
+ * Converts an image to a line-art mask: 1 = black line, 0 = white.
+ * If the image has a transparent background (Pokémon cut out), the Pokémon gets a smooth closed
+ * outline from the alpha mask, and edges are only detected inside it.
+ */
 export function lineArt(img: RgbaImage, s: LineArtSettings): Uint8Array {
   const { width: w, height: h } = img;
   const channels = ([0, 1, 2] as const).map((c) => blur(toChannel(img, c), w, h, s.blur));
   const edges = canny(gradient(channels, w, h), w, h, s.detail);
+  const fg = alphaMask(img);
+  if (!fg) {
+    removeSpeckles(edges, w, h, s.minSpeckle);
+    return dilate(edges, w, h, s.lineWidth);
+  }
+  // Drop edges near the silhouette: the cutout's edge itself and the artist's ink outline just
+  // inside it would otherwise run as a second, wobbly line beside the outline.
+  const outline = outlineWidth(s.lineWidth);
+  const inner = erode(fg, w, h, 2 * (outline + s.blur) + 1);
+  for (let i = 0; i < edges.length; i++) edges[i] &= inner[i];
   removeSpeckles(edges, w, h, s.minSpeckle);
-  return dilate(edges, w, h, s.lineWidth);
+  const lines = dilate(edges, w, h, s.lineWidth);
+  const ring = silhouette(fg, w, h, outline);
+  for (let i = 0; i < lines.length; i++) lines[i] |= ring[i];
+  return lines;
 }

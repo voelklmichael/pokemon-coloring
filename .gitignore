@@ -4,3 +4,4 @@ dist/
 testdata/
 .venv/
 .cache/
+__pycache__/
