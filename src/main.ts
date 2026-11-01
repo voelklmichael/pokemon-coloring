@@ -1,34 +1,55 @@
 import './style.css';
+import { fetchDatabaseCard, parseDatabaseUrl, searchCards, type DatabaseRef, type SearchResult } from './database';
+import { findArtRect, type Rect } from './detect';
 import { decodeImage, fetchImage, nameFromUrl, parseUrls } from './import';
-import { DEFAULT_LINE_ART, lineArt, PRESETS, type LineArtSettings, type PresetName } from './lineart';
+import { DEFAULT_LINE_ART, PRESETS, type LineArtSettings, type PresetName } from './lineart';
 import { normalizeCard } from './normalize';
 import { buildPdf, type Paper } from './pdf';
+import { renderCard, type LayoutMode } from './render';
+import {
+  costToLetters,
+  DEFAULT_STRUCTURE,
+  ENERGY_TYPES,
+  lettersToCost,
+  type CardStructure,
+  type EnergyType,
+  type Stage,
+} from './structure';
 
 interface Settings {
   lineArt: LineArtSettings;
+  layout: LayoutMode;
   paper: Paper;
   gap: number;
   cutLines: boolean;
   proxy: string;
 }
 
+/** Where a card's layout came from; "default" means nobody checked it yet. */
+type StructureSource = 'database' | 'default' | 'edited';
+
 interface Card {
   id: number;
   name: string;
-  source: ImageData;
-  lineart: HTMLCanvasElement;
+  source: HTMLCanvasElement;
+  art: Rect;
+  structure: CardStructure;
+  structureSource: StructureSource;
+  output: HTMLCanvasElement;
   copies: number;
   el: HTMLElement;
 }
 
 const DEFAULT_SETTINGS: Settings = {
   lineArt: DEFAULT_LINE_ART,
+  layout: 'template',
   paper: 'a4',
   gap: 2,
   cutLines: true,
   proxy: '',
 };
 const STORAGE_KEY = 'pokemon-coloring:settings';
+const SEARCH_PAGE = 48;
 
 const $ = <T extends HTMLElement>(selector: string) => document.querySelector(selector) as T;
 
@@ -39,7 +60,13 @@ let nextId = 1;
 function loadSettings(): Settings {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? 'null');
-    if (saved) return { ...DEFAULT_SETTINGS, ...saved, lineArt: { ...DEFAULT_LINE_ART, ...saved.lineArt } };
+    if (saved) {
+      const lineArt = { ...DEFAULT_LINE_ART };
+      for (const key of Object.keys(lineArt) as (keyof LineArtSettings)[]) {
+        if (typeof saved.lineArt?.[key] === 'number') lineArt[key] = saved.lineArt[key];
+      }
+      return { ...DEFAULT_SETTINGS, ...saved, lineArt };
+    }
   } catch {
     // storage unavailable or corrupt: fall back to defaults
   }
@@ -66,21 +93,13 @@ function notify(text: string, kind: 'error' | 'info' = 'error') {
   close.onclick = () => li.remove();
   li.append(close);
   $('#messages').append(li);
-  if (kind === 'info') setTimeout(() => li.remove(), 4000);
+  if (kind === 'info') setTimeout(() => li.remove(), 6000);
 }
 
 // ---------- cards ----------
 
-function renderLineArt(card: Card) {
-  const { width, height } = card.source;
-  const mask = lineArt(card.source, settings.lineArt);
-  const out = new ImageData(width, height);
-  for (let i = 0, p = 0; i < mask.length; i++, p += 4) {
-    const v = mask[i] ? 0 : 255;
-    out.data[p] = out.data[p + 1] = out.data[p + 2] = v;
-    out.data[p + 3] = 255;
-  }
-  card.lineart.getContext('2d')!.putImageData(out, 0, 0);
+function render(card: Card) {
+  renderCard(card.output, card, settings.lineArt, settings.layout);
 }
 
 function updateCount() {
@@ -89,21 +108,86 @@ function updateCount() {
   $('#empty-hint').hidden = cards.length > 0;
 }
 
-function addCard(bitmap: ImageBitmap, name: string) {
-  const source = normalizeCard(bitmap);
+const SOURCE_LABELS: Record<StructureSource, string> = {
+  database: '(from card database)',
+  default: '(default — please check)',
+  edited: '(edited)',
+};
+
+function fillEnergySelect(select: HTMLSelectElement) {
+  select.append(new Option('none', ''));
+  for (const t of ENERGY_TYPES) select.append(new Option(t, t));
+}
+
+/** Wires the per-card layout editor to `card.structure`. */
+function setupStructureEditor(card: Card) {
+  const el = card.el;
+  const field = <T extends HTMLElement>(name: string) => el.querySelector<T>(`[data-field="${name}"]`)!;
+  el.querySelectorAll<HTMLSelectElement>('.energy-select').forEach(fillEnergySelect);
+
+  const sync = () => {
+    const s = card.structure;
+    field<HTMLSelectElement>('stage').value = s.stage;
+    field<HTMLSelectElement>('type').value = s.type ?? '';
+    field<HTMLInputElement>('abilities').value = String(s.abilities);
+    field<HTMLInputElement>('retreat').value = String(s.retreat);
+    field<HTMLSelectElement>('weakness').value = s.weakness ?? '';
+    field<HTMLSelectElement>('resistance').value = s.resistance ?? '';
+    field<HTMLInputElement>('attacks').value = s.attacks.map((a) => costToLetters(a.cost)).join(', ');
+    el.querySelector('.structure-source')!.textContent = SOURCE_LABELS[card.structureSource];
+    el.classList.toggle('unchecked', card.structureSource === 'default');
+  };
+
+  const clamp = (v: string, max: number) => Math.max(0, Math.min(max, Math.round(Number(v) || 0)));
+  const energy = (v: string) => (v ? (v as EnergyType) : null);
+  const update = () => {
+    const previous = card.structure.attacks;
+    card.structure = {
+      stage: field<HTMLSelectElement>('stage').value as Stage,
+      type: energy(field<HTMLSelectElement>('type').value),
+      abilities: clamp(field<HTMLInputElement>('abilities').value, 2),
+      retreat: clamp(field<HTMLInputElement>('retreat').value, 5),
+      weakness: energy(field<HTMLSelectElement>('weakness').value),
+      resistance: energy(field<HTMLSelectElement>('resistance').value),
+      attacks: field<HTMLInputElement>('attacks')
+        .value.split(',')
+        .map((group) => lettersToCost(group))
+        .filter((cost) => cost.length > 0)
+        .slice(0, 4)
+        // keep the damage box setting of attacks that already existed
+        .map((cost, i) => ({ cost: cost.slice(0, 5), damage: previous[i]?.damage ?? true })),
+    };
+    card.structureSource = 'edited';
+    sync();
+    render(card);
+  };
+
+  el.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-field]').forEach((input) => (input.onchange = update));
+  sync();
+}
+
+function addCard(bitmap: ImageBitmap, name: string, structure: CardStructure | null) {
+  const image = normalizeCard(bitmap);
   bitmap.close();
   const el = ($<HTMLTemplateElement>('#card-template').content.firstElementChild as HTMLElement).cloneNode(
     true,
   ) as HTMLElement;
-  const original = el.querySelector<HTMLCanvasElement>('canvas.original')!;
-  const lineart = el.querySelector<HTMLCanvasElement>('canvas.lineart')!;
-  for (const c of [original, lineart]) {
-    c.width = source.width;
-    c.height = source.height;
-  }
-  original.getContext('2d')!.putImageData(source, 0, 0);
+  const source = el.querySelector<HTMLCanvasElement>('canvas.original')!;
+  source.width = image.width;
+  source.height = image.height;
+  source.getContext('2d', { willReadFrequently: true })!.putImageData(image, 0, 0);
 
-  const card: Card = { id: nextId++, name, source, lineart, copies: 1, el };
+  const card: Card = {
+    id: nextId++,
+    name,
+    source,
+    art: findArtRect(image),
+    structure: structure ?? structuredClone(DEFAULT_STRUCTURE),
+    structureSource: structure ? 'database' : 'default',
+    output: el.querySelector<HTMLCanvasElement>('canvas.output')!,
+    copies: 1,
+    el,
+  };
   const nameEl = el.querySelector('.card-name')!;
   nameEl.textContent = name;
   nameEl.setAttribute('title', name);
@@ -117,26 +201,43 @@ function addCard(bitmap: ImageBitmap, name: string) {
     el.remove();
     updateCount();
   };
+  setupStructureEditor(card);
 
-  renderLineArt(card);
+  render(card);
   cards.push(card);
   $('#card-grid').append(el);
   updateCount();
 }
 
-async function addFromBlob(blob: Blob, name: string) {
+async function addFromBlob(blob: Blob, name: string, structure: CardStructure | null = null) {
   try {
-    addCard(await decodeImage(blob), name);
+    addCard(await decodeImage(blob), name, structure);
   } catch (err) {
     notify(`Could not add “${name}”: ${(err as Error).message}`);
   }
 }
 
+async function addFromDatabase(ref: DatabaseRef): Promise<boolean> {
+  try {
+    const card = await fetchDatabaseCard(ref);
+    const blob = await fetchImage(card.imageUrl, settings.proxy);
+    await addFromBlob(blob, `${card.name} (${card.id})`, card.structure);
+    return true;
+  } catch (err) {
+    notify(`Could not load card ${ref.id} from the card database: ${(err as Error).message}`);
+    return false;
+  }
+}
+
 async function addFromUrls(urls: string[]) {
   for (const url of urls) {
+    const ref = parseDatabaseUrl(url);
+    if (ref && (await addFromDatabase(ref))) continue;
+    // Plain image link, or the database is unavailable: image only, default layout.
     const name = nameFromUrl(url);
     try {
       await addFromBlob(await fetchImage(url, settings.proxy), name);
+      notify(`“${name}” has no card data — check its layout under “Layout”.`, 'info');
     } catch (err) {
       notify(`Could not load “${name}”: ${(err as Error).message}`);
     }
@@ -144,10 +245,16 @@ async function addFromUrls(urls: string[]) {
 }
 
 async function addFiles(files: Iterable<File>) {
+  let added = 0;
   for (const file of files) {
-    if (file.type.startsWith('image/')) await addFromBlob(file, file.name);
-    else notify(`Skipped “${file.name}”: not an image.`);
+    if (file.type.startsWith('image/')) {
+      await addFromBlob(file, file.name);
+      added++;
+    } else {
+      notify(`Skipped “${file.name}”: not an image.`);
+    }
   }
+  if (added) notify('Uploaded images have no card data — check each card’s layout under “Layout”.', 'info');
 }
 
 /** Re-renders all cards after a settings change; a newer change cancels an older run. */
@@ -159,13 +266,66 @@ function scheduleRerender() {
     const generation = ++renderGeneration;
     for (const card of [...cards]) {
       if (generation !== renderGeneration) return;
-      renderLineArt(card);
+      render(card);
       await new Promise((resolve) => requestAnimationFrame(resolve));
     }
   }, 150);
 }
 
-// ---------- import wiring ----------
+// ---------- search ----------
+
+let searchResults: SearchResult[] = [];
+let searchShown = 0;
+
+function showSearchResults() {
+  const container = $('#search-results');
+  for (const result of searchResults.slice(searchShown, searchShown + SEARCH_PAGE)) {
+    const button = document.createElement('button');
+    button.className = 'search-result';
+    button.title = `Add ${result.name} (${result.id})`;
+    const img = document.createElement('img');
+    img.src = `${result.image}/low.webp`;
+    img.alt = result.name;
+    img.loading = 'lazy';
+    const caption = document.createElement('span');
+    caption.textContent = `${result.name} · ${result.id}`;
+    button.append(img, caption);
+    button.onclick = async () => {
+      button.disabled = true;
+      button.classList.add('loading');
+      const ok = await addFromDatabase({ db: 'tcgdex', id: result.id });
+      button.classList.remove('loading');
+      button.classList.toggle('added', ok);
+      button.disabled = false;
+    };
+    container.append(button);
+  }
+  searchShown = Math.min(searchResults.length, searchShown + SEARCH_PAGE);
+  $('#search-more').hidden = searchShown >= searchResults.length;
+}
+
+$<HTMLFormElement>('#search-form').onsubmit = async (e) => {
+  e.preventDefault();
+  const query = $<HTMLInputElement>('#search-input').value.trim();
+  if (!query) return;
+  const status = $('#search-status');
+  status.textContent = 'Searching…';
+  $('#search-results').replaceChildren();
+  $('#search-more').hidden = true;
+  try {
+    searchResults = await searchCards(query);
+    searchShown = 0;
+    status.textContent = searchResults.length
+      ? `${searchResults.length} cards found — click cards to add them.`
+      : `No cards found for “${query}”. Check the spelling (English names).`;
+    showSearchResults();
+  } catch (err) {
+    status.textContent = `Search failed: ${(err as Error).message}. Please try again.`;
+  }
+};
+$('#search-more').onclick = showSearchResults;
+
+// ---------- other import wiring ----------
 
 $<HTMLInputElement>('#file-input').onchange = async (e) => {
   const input = e.target as HTMLInputElement;
@@ -177,7 +337,7 @@ $('#url-add').onclick = async () => {
   const textarea = $<HTMLTextAreaElement>('#url-input');
   const urls = parseUrls(textarea.value);
   if (!urls.length) {
-    notify('Please paste at least one image link (starting with http:// or https://).');
+    notify('Please paste at least one link (starting with http:// or https://).');
     return;
   }
   textarea.value = '';
@@ -212,9 +372,10 @@ document.addEventListener('paste', async (e) => {
       const file = item.getAsFile();
       if (file) await addFromBlob(file, `pasted image ${nextId}`);
     }
+    notify('Pasted images have no card data — check the layout under “Layout”.', 'info');
     return;
   }
-  // Pasting links outside the textarea adds them directly.
+  // Pasting links outside text fields adds them directly.
   if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
   const urls = parseUrls(e.clipboardData?.getData('text/plain') ?? '');
   if (urls.length) {
@@ -233,19 +394,18 @@ proxyInput.onchange = () => {
 // ---------- line settings wiring ----------
 
 const sliders = [...document.querySelectorAll<HTMLInputElement>('input[data-setting]')];
-type NumericSetting = Exclude<keyof LineArtSettings, 'textMode'>;
 
 function syncSettingsUi() {
   for (const slider of sliders) {
-    slider.value = String(settings.lineArt[slider.dataset.setting as NumericSetting]);
+    slider.value = String(settings.lineArt[slider.dataset.setting as keyof LineArtSettings]);
     slider.nextElementSibling!.textContent = slider.value;
   }
-  $<HTMLInputElement>('#hide-text').checked = settings.lineArt.textMode === 'hide';
+  $<HTMLSelectElement>('#layout-mode').value = settings.layout;
 }
 
 for (const slider of sliders) {
   slider.oninput = () => {
-    settings.lineArt[slider.dataset.setting as NumericSetting] = Number(slider.value);
+    settings.lineArt[slider.dataset.setting as keyof LineArtSettings] = Number(slider.value);
     slider.nextElementSibling!.textContent = slider.value;
     saveSettings();
     scheduleRerender();
@@ -261,8 +421,8 @@ for (const button of document.querySelectorAll<HTMLButtonElement>('[data-preset]
   };
 }
 
-$<HTMLInputElement>('#hide-text').onchange = (e) => {
-  settings.lineArt.textMode = (e.target as HTMLInputElement).checked ? 'hide' : 'edges';
+$<HTMLSelectElement>('#layout-mode').onchange = (e) => {
+  settings.layout = (e.target as HTMLSelectElement).value as LayoutMode;
   saveSettings();
   scheduleRerender();
 };
@@ -293,7 +453,7 @@ $<HTMLButtonElement>('#download').onclick = async (e) => {
   const button = e.currentTarget as HTMLButtonElement;
   const images = cards.flatMap((card) => {
     if (card.copies === 0) return [];
-    const image = { key: `card-${card.id}`, dataUrl: card.lineart.toDataURL('image/png') };
+    const image = { key: `card-${card.id}`, dataUrl: card.output.toDataURL('image/png') };
     return Array<typeof image>(card.copies).fill(image);
   });
   if (!images.length) {

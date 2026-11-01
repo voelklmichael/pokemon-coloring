@@ -2,170 +2,114 @@
 
 ## Goal
 
-A static website, hosted on GitHub Pages, that turns Pokémon TCG card images into
-simplified black-and-white line-art "coloring cards". Several cards can be processed
-at once, and the result is a printable PDF with cards at roughly real size
-(63 × 88 mm) that kids can color.
+A static website, hosted on GitHub Pages, that turns Pokémon TCG cards into
+black-and-white coloring cards. Every card gets the same clean **base layout**
+(header, artwork window, attacks, weakness/retreat row, footer) with all text and
+numbers removed; only the card's artwork is converted to line art. Several cards
+can be processed at once, and the result is a printable PDF with cards at real
+size (63 × 88 mm).
 
 ## User flow
 
-1. **Add cards** (batch). Any mix of:
-   - paste an image URL (one or many, one per line)
-   - upload image files (file picker or drag & drop, multiple files)
-   - paste an image from the clipboard (Ctrl+V after "Copy image" in the browser)
-2. **Preview** each card: original next to its line-art version.
-3. **Tune** (globally, with per-card overrides): line thickness, detail level,
-   "keep text" on/off, invert check.
-4. **Arrange & print**: choose paper size (A4 / Letter), cards per page, cut marks,
-   then **Download PDF**.
+1. **Find cards**: search by Pokémon name (TCGdex database) and click results to add
+   them. Alternatives: paste card links, upload/drop images, paste from the clipboard.
+2. **Preview** each card: original next to the coloring version. For cards without
+   database data, check/edit the layout (stage, type, attacks, …) per card.
+3. **Tune** line art globally: presets + sliders (smoothing, detail, specks, line width).
+   Optionally switch to "outlines of the original card".
+4. **Print**: choose paper (A4 / Letter), copies per card, cut lines → **Download PDF**.
 
 ## Architecture
 
-Everything runs in the browser — no backend. This fits GitHub Pages (static hosting
-only) and means images never leave the user's machine.
+Everything runs in the browser — no backend.
 
 ```
- ┌──────────────┐   ┌──────────────┐   ┌───────────────┐   ┌────────────┐
- │ Import       │──▶│ Normalize    │──▶│ Line-art      │──▶│ PDF layout │──▶ download
- │ URL/file/clip│   │ crop, resize │   │ conversion    │   │ (jsPDF)    │
- └──────────────┘   └──────────────┘   └───────────────┘   └────────────┘
+ search / link ──▶ card database ──▶ structure (stage, type, attacks, …) ─┐
+       │              (TCGdex, pokemontcg.io)                             │
+       ▼                                                                  ▼
+ card image ──▶ normalize ──▶ find art window ──▶ line art ──▶ base layout template ──▶ PDF
+ (upload/paste)                                                (canvas)              (jsPDF)
 ```
 
-### Technology choice
+### Card data sources
 
-| Option | Pros | Cons |
+| Source | Used for | Notes |
 |---|---|---|
-| **TypeScript + Vite** (recommended) | Simple, fast iteration, huge ecosystem (jsPDF, OpenCV.js), trivial GH Pages deploy | Image processing in JS is slower (fine for a handful of cards) |
-| Rust → WASM (e.g. `image` + `imageproc` crates, Leptos/Yew or a thin TS UI) | Fast, typed image pipeline, fun if you like Rust | More build tooling, larger initial effort |
+| [TCGdex](https://tcgdex.dev) `api.tcgdex.net/v2/en` | search by name, card data + images | CORS everywhere, reliable, has stage + abilities |
+| pokemontcg.io `api.pokemontcg.io/v2` | links to `images.pokemontcg.io` | API often answers 5xx without CORS headers → retry, then image only |
+| Uploads / other links | image only | default layout, user edits it per card |
 
-**Recommendation:** start with TypeScript + Vite and plain Canvas processing.
-If the image pipeline becomes a bottleneck or gets complex, move just the
-`lineart` module to Rust/WASM behind the same interface.
+Structure model (`src/structure.ts`): stage (basic / stage 1 / stage 2), type,
+number of abilities, attacks (energy cost list + whether there is a damage box),
+weakness, resistance, retreat cost. Text and numbers are deliberately not modeled.
 
-Planned libraries:
-- `vite` — build/dev server
-- `jspdf` — PDF generation (mm units, embeds PNG/JPEG)
-- optionally `@techstark/opencv-js` — Canny edge detection, morphology (lazy-loaded, ~8 MB)
+Detecting the structure from the image alone (energy symbol circles via Hough
+transform) was prototyped and dropped: unreliable across card eras, and the
+database covers the use case.
 
-## Components
+### Image processing
 
-### 1. Import
+- **Normalize** (`normalize.ts`): trim background, scale to 744 × 1039 px (~300 DPI).
+- **Art window** (`detect.ts`): strongest horizontal/vertical border lines near the
+  expected positions, assuming a centered window; falls back to the modern layout's
+  window (full-art cards have none).
+- **Line art** (`lineart.ts`), on the art crop only so thresholds adapt to the artwork:
+  1. per-channel blur (R, G, B)
+  2. Sobel per channel, strongest channel wins (finds borders between colors of equal brightness)
+  3. Canny: non-maximum suppression + hysteresis, thresholds from a gradient percentile ("detail")
+  4. remove small connected components ("specks")
+  5. dilate to the chosen line width
+  - Tried and dropped: morphological closing + thinning to merge the double lines of
+    inked outlines — it also merged separate details into clutter.
 
-- **Upload / drag & drop / clipboard:** read as `Blob` → `ImageBitmap`. No issues.
-- **URL import:** the hard part is **CORS**. Loading a cross-origin image into a
-  canvas taints it unless the server sends `Access-Control-Allow-Origin`.
-  Strategy, in order:
-  1. `fetch(url)` directly — works for hosts that send CORS headers
-     (e.g. the pokemontcg.io image CDN is a good primary source to test against).
-  2. Optional configurable CORS proxy (user-supplied URL, or a tiny Cloudflare Worker
-     we can deploy separately — free tier is enough).
-  3. Fall back with a clear message: "This site blocks direct loading — right-click
-     the image → *Copy image*, then paste here" or download & upload.
-- Batch: a textarea accepting multiple URLs; each becomes one card in the list.
+### Base layout template (`template.ts`)
 
-### 2. Normalize
+Drawn with Canvas 2D at 744 × 1039 px:
+stage tag (+ pre-evolution bubble for stage 1/2), name line, HP box, type symbol,
+artwork frame, metadata strip, ability boxes, attack rows (energy cost circles with
+type icons, name line, damage box), weakness / resistance / retreat symbols, footer.
 
-- Detect/crop card bounds (trim uniform border/background; uploads from photos may
-  need a manual crop rectangle — v2).
-- Force aspect ratio 63:88 and resample to a working resolution
-  (e.g. 744 × 1039 px ≈ 300 DPI at card size).
+### PDF (`pdf.ts`)
 
-### 3. Line-art conversion (core)
+63 × 88 mm cards, 3 × 3 per A4 or Letter page, optional gap and cut lines, 50 mm
+calibration line on page 1, identical cards embedded once.
 
-Goal: clean outlines on white, no large black areas (bad for coloring, wastes ink).
-
-Pipeline (v1, pure Canvas):
-1. Grayscale.
-2. Light blur / bilateral-ish smoothing to drop texture and holo patterns.
-3. Edge detection (Sobel magnitude, or Canny via OpenCV.js).
-4. Threshold → binary; remove tiny speckles (connected components below N px).
-5. Optionally dilate to thicken lines (kid-friendly thick strokes).
-6. Output: black lines on white.
-
-**Text handling:** card text (name, HP, attacks) looks bad through edge detection
-(hollow letters). Options:
-- "Keep text": for the known text regions of the standard card layout, use a simple
-  threshold instead of edges, so text stays solid and readable.
-- "Hide text": blank those regions, leaving empty boxes kids can fill in.
-- Region layouts depend on card era (classic vs. Scarlet & Violet vs. full-art);
-  start with one modern layout + "whole card same mode" fallback.
-
-Tunable parameters exposed in UI: blur radius, edge threshold, min speckle size,
-line thickness. Provide 2–3 presets ("Simple", "Detailed", "Toddler: very thick").
-
-Future option: ML-based line extraction (e.g. ONNX model via onnxruntime-web) for
-nicer results — only if classic edges aren't good enough.
-
-### 4. PDF layout
-
-- Card size: **63 × 88 mm** (standard TCG).
-- **A4 (210 × 297 mm): 3 × 3 = 9 cards** (189 × 264 mm + gaps).
-  Letter (215.9 × 279.4 mm): 3 × 3 also fits with small margins.
-- Thin gray cut marks / outlines; optional 1–2 mm gap between cards.
-- Embed images as PNG (1-bit-looking, compresses well) at ~300 DPI.
-- Option: "duplicate each card N times" (one per kid).
-- Print note in the UI: *print at 100% / "Actual size", not "Fit to page"*,
-  otherwise cards come out smaller. Include a 50 mm calibration bar on page 1's
-  margin to verify scaling.
-
-### 5. UI
-
-Single page:
-- Import area (URL textarea, file drop zone, paste hint).
-- Card grid: thumbnail original ↔ line-art, per-card settings, remove, reorder.
-- Global settings panel + presets.
-- Print settings + "Download PDF" button.
-- Settings persisted in `localStorage`.
-
-## Project structure (planned)
+## Project structure
 
 ```
-/
-├─ docs/PLAN.md
-├─ index.html
-├─ src/
-│  ├─ main.ts            UI wiring
-│  ├─ import.ts          URL / file / clipboard loading, CORS fallback
-│  ├─ normalize.ts       crop, resize, aspect ratio
-│  ├─ lineart.ts         image → line-art pipeline
-│  ├─ layout.ts          card regions per card era
-│  ├─ pdf.ts             page layout, jsPDF export
-│  └─ style.css
-├─ test/                 unit tests (vitest) for pdf geometry & pipeline steps
-├─ samples/              a few test card images (for local dev only, not committed if unclear licensing)
-└─ .github/workflows/deploy.yml   build + deploy to GitHub Pages
+src/
+├─ main.ts        UI wiring (search, import, settings, cards, PDF button)
+├─ database.ts    TCGdex / pokemontcg.io lookups, link parsing
+├─ structure.ts   card structure model, energy types
+├─ import.ts      URL / file / clipboard loading, CORS fallback
+├─ normalize.ts   crop + resize to working resolution
+├─ detect.ts      art window detection
+├─ lineart.ts     image → line-art mask
+├─ template.ts    base layout drawing, energy icons
+├─ render.ts      combines art line art + template per card
+├─ pdf.ts         page layout, jsPDF export
+└─ style.css
+test/             vitest unit tests
+.github/workflows/deploy.yml   test + build + deploy to GitHub Pages
 ```
-
-## Deployment
-
-- GitHub Actions workflow: on push to `main` → `npm ci && npm run build` →
-  upload `dist/` → `actions/deploy-pages`.
-- Vite `base` set to `/<repo-name>/`.
-- Repository Settings → Pages → Source: "GitHub Actions".
 
 ## Milestones
 
-1. ✅ **Skeleton:** Vite + TS project, GH Pages deploy workflow.
-2. ✅ **Line art:** upload → preview; Canny with adaptive (percentile) thresholds, speckle removal, dilation; sliders.
-3. ✅ **PDF export:** 3×3 A4/Letter layout at true size, cut lines, 50 mm calibration bar.
-   ⬜ Real print test.
-4. ✅ **Batch + clipboard + URL import** (incl. drag from other tabs) with CORS fallback messaging
-   and optional proxy setting. pokemontcg.io images load directly (sends CORS headers).
-5. ✅ **Text removal** (default; modern card layout only) + presets. "Keep text" mode dropped for now.
-6. 🟡 **Polish:** copies per card ✅, Letter paper ✅, localStorage ✅; per-card overrides, reorder ⬜.
-7. ⬜ *(Optional)* per-era text layouts, manual crop, CORS proxy worker, Rust/WASM pipeline, ML line art.
-
-## Open questions
-
-- Paper size: A4 (Europe) as default? Letter needed?
-- Keep card text, hide it, or let kids color everything including text?
-- Should the card frame/border be preserved as outline, or only the Pokémon artwork
-  enlarged to fill the card?
-- Which source websites will you typically copy from? (Determines how important the
-  CORS proxy is.)
+1. ✅ Skeleton: Vite + TS, GH Pages workflow.
+2. ✅ Line art with adaptive Canny, presets, sliders.
+3. ✅ PDF export at true size. ⬜ Real print test.
+4. ✅ Batch import: links, files, drag & drop, clipboard, CORS fallback.
+5. ✅ Card database: TCGdex search, link parsing, pokemontcg.io links.
+6. ✅ Base layout template with energy icons; per-card layout editor for uploads.
+7. ⬜ Next ideas:
+   - better art for full-art cards (no art window: use whole card or let the user pick)
+   - manual art crop adjustment per card
+   - optional: write the Pokémon name / HP into the template (font, toggle)
+   - ML line extraction (e.g. ONNX model) if classic edges aren't good enough
+   - reorder cards, per-card line settings
 
 ## Notes
 
 - Pokémon card images are copyrighted by Nintendo / Creatures / GAME FREAK / The
-  Pokémon Company. The tool does not host or bundle any card images — users bring
-  their own, for private, non-commercial use at home.
+  Pokémon Company. The tool does not host or bundle card images; they are loaded from
+  public card databases for private, non-commercial use at home.

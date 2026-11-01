@@ -1,5 +1,3 @@
-import { TEXT_REGIONS, type Region } from './layout';
-
 /** Minimal RGBA image; structurally compatible with the DOM's ImageData. */
 export interface RgbaImage {
   width: number;
@@ -7,30 +5,26 @@ export interface RgbaImage {
   data: ArrayLike<number>;
 }
 
-/** "hide": blank the text areas, leaving empty boxes. "edges": treat text like the rest of the card. */
-export type TextMode = 'hide' | 'edges';
-
 export interface LineArtSettings {
   /** Blur radius in px applied before edge detection; removes texture and holo patterns. */
   blur: number;
-  /** Percentage (0..100) of pixels with the strongest gradients that start a line. Adapts to each card's contrast. */
+  /** Percentage (0..100) of pixels with the strongest gradients that start a line. Adapts to each image's contrast. */
   detail: number;
   /** Line fragments smaller than this many px are removed. */
   minSpeckle: number;
   /** Output stroke width in px (odd values). */
   lineWidth: number;
-  textMode: TextMode;
 }
 
 export const PRESETS = {
   simple: { blur: 2, detail: 10, minSpeckle: 80, lineWidth: 3 },
   detailed: { blur: 1, detail: 14, minSpeckle: 40, lineWidth: 3 },
   thick: { blur: 2, detail: 10, minSpeckle: 150, lineWidth: 7 },
-} satisfies Record<string, Omit<LineArtSettings, 'textMode'>>;
+} satisfies Record<string, LineArtSettings>;
 
 export type PresetName = keyof typeof PRESETS;
 
-export const DEFAULT_LINE_ART: LineArtSettings = { ...PRESETS.detailed, textMode: 'hide' };
+export const DEFAULT_LINE_ART: LineArtSettings = { ...PRESETS.detailed };
 
 /** Luminance 0..255, with transparent pixels composited onto white. */
 export function toGray(img: RgbaImage): Float32Array {
@@ -40,6 +34,17 @@ export function toGray(img: RgbaImage): Float32Array {
     const a = data[p + 3] / 255;
     const g = 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2];
     out[i] = g * a + 255 * (1 - a);
+  }
+  return out;
+}
+
+/** One color channel 0..255, with transparent pixels composited onto white. */
+function toChannel(img: RgbaImage, c: 0 | 1 | 2): Float32Array {
+  const { data } = img;
+  const out = new Float32Array(img.width * img.height);
+  for (let i = 0, p = 0; i < out.length; i++, p += 4) {
+    const a = data[p + 3] / 255;
+    out[i] = data[p + c] * a + 255 * (1 - a);
   }
   return out;
 }
@@ -81,6 +86,43 @@ export function blur(src: Float32Array, w: number, h: number, radius: number): F
   return a;
 }
 
+export interface Gradient {
+  /** Gradient strength, roughly 0..255. */
+  mag: Float32Array;
+  /** Direction quantized to 0: along x, 1: down-right diagonal, 2: along y, 3: down-left diagonal. */
+  dir: Uint8Array;
+}
+
+/**
+ * Sobel gradient over several channels; per pixel the strongest channel wins.
+ * With R, G and B this also finds borders between colors of similar brightness.
+ */
+export function gradient(channels: Float32Array[], w: number, h: number): Gradient {
+  const mag = new Float32Array(w * h);
+  const dir = new Uint8Array(w * h);
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x;
+      let best = -1, gx = 0, gy = 0;
+      for (const c of channels) {
+        const dx = c[i - w + 1] + 2 * c[i + 1] + c[i + w + 1] - (c[i - w - 1] + 2 * c[i - 1] + c[i + w - 1]);
+        const dy = c[i + w - 1] + 2 * c[i + w] + c[i + w + 1] - (c[i - w - 1] + 2 * c[i - w] + c[i - w + 1]);
+        const m = dx * dx + dy * dy;
+        if (m > best) {
+          best = m;
+          gx = dx;
+          gy = dy;
+        }
+      }
+      mag[i] = Math.sqrt(best) / 4;
+      let angle = (Math.atan2(gy, gx) * 180) / Math.PI;
+      if (angle < 0) angle += 180;
+      dir[i] = angle < 22.5 || angle >= 157.5 ? 0 : angle < 67.5 ? 1 : angle < 112.5 ? 2 : 3;
+    }
+  }
+  return { mag, dir };
+}
+
 /** Gradient value above which `percent` % of the pixels lie. */
 export function percentile(values: Float32Array, percent: number): number {
   const bins = new Uint32Array(1024);
@@ -98,29 +140,12 @@ export function percentile(values: Float32Array, percent: number): number {
 }
 
 /**
- * Canny edge detection (Sobel, non-maximum suppression, hysteresis). Returns 1 for edge pixels.
+ * Canny edge detection (non-maximum suppression, hysteresis) on a precomputed gradient.
  * The thresholds adapt to the image: the strongest `detail` % of gradients start lines.
+ * Returns 1 for edge pixels.
  */
-export function canny(gray: Float32Array, w: number, h: number, detail: number): Uint8Array {
+export function canny({ mag, dir }: Gradient, w: number, h: number, detail: number): Uint8Array {
   const n = w * h;
-  const mag = new Float32Array(n);
-  const dir = new Uint8Array(n);
-  for (let y = 1; y < h - 1; y++) {
-    for (let x = 1; x < w - 1; x++) {
-      const i = y * w + x;
-      const tl = gray[i - w - 1], t = gray[i - w], tr = gray[i - w + 1];
-      const l = gray[i - 1], r = gray[i + 1];
-      const bl = gray[i + w - 1], b = gray[i + w], br = gray[i + w + 1];
-      const gx = tr + 2 * r + br - (tl + 2 * l + bl);
-      const gy = bl + 2 * b + br - (tl + 2 * t + tr);
-      mag[i] = Math.hypot(gx, gy) / 4;
-      let angle = (Math.atan2(gy, gx) * 180) / Math.PI;
-      if (angle < 0) angle += 180;
-      // 0: gradient along x, 1: along the down-right diagonal, 2: along y, 3: along the down-left diagonal
-      dir[i] = angle < 22.5 || angle >= 157.5 ? 0 : angle < 67.5 ? 1 : angle < 112.5 ? 2 : 3;
-    }
-  }
-
   // Never treat faint texture as lines, even on very flat images.
   const high = Math.max(percentile(mag, detail), 8);
   const low = high / 2;
@@ -217,26 +242,11 @@ export function dilate(mask: Uint8Array, w: number, h: number, width: number): U
   return out;
 }
 
-/** Clears a region and draws a box outline around it. */
-function hideRegion(mask: Uint8Array, w: number, h: number, region: Region, lineWidth: number) {
-  const x0 = Math.round(region.x * w), y0 = Math.round(region.y * h);
-  const x1 = Math.round((region.x + region.w) * w), y1 = Math.round((region.y + region.h) * h);
-  const lw = Math.max(1, Math.round(lineWidth / 2));
-  for (let y = y0; y < y1; y++) {
-    for (let x = x0; x < x1; x++) {
-      const border = x < x0 + lw || x >= x1 - lw || y < y0 + lw || y >= y1 - lw;
-      mask[y * w + x] = border ? 1 : 0;
-    }
-  }
-}
-
-/** Converts a card image to a line-art mask: 1 = black line, 0 = white. */
-export function lineArt(img: RgbaImage, s: LineArtSettings, textRegions: Region[] = TEXT_REGIONS): Uint8Array {
+/** Converts an image to a line-art mask: 1 = black line, 0 = white. */
+export function lineArt(img: RgbaImage, s: LineArtSettings): Uint8Array {
   const { width: w, height: h } = img;
-  const smooth = blur(toGray(img), w, h, s.blur);
-  const edges = canny(smooth, w, h, s.detail);
+  const channels = ([0, 1, 2] as const).map((c) => blur(toChannel(img, c), w, h, s.blur));
+  const edges = canny(gradient(channels, w, h), w, h, s.detail);
   removeSpeckles(edges, w, h, s.minSpeckle);
-  const mask = dilate(edges, w, h, s.lineWidth);
-  if (s.textMode === 'hide') for (const region of textRegions) hideRegion(mask, w, h, region, s.lineWidth);
-  return mask;
+  return dilate(edges, w, h, s.lineWidth);
 }
