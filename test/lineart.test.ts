@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canny, dilate, lineArt, removeSpeckles, toGray, DEFAULT_LINE_ART, type RgbaImage } from '../src/lineart';
+import { canny, dilate, gradient, lineArt, removeSpeckles, toGray, DEFAULT_LINE_ART, type RgbaImage } from '../src/lineart';
 
 /** White image with a black filled rectangle. */
 function rectImage(w: number, h: number, x0: number, y0: number, x1: number, y1: number): RgbaImage {
@@ -25,7 +25,7 @@ describe('toGray', () => {
 describe('canny', () => {
   it('finds the outline of a filled rectangle, not its inside', () => {
     const w = 40, h = 40;
-    const mask = canny(toGray(rectImage(w, h, 10, 10, 30, 30)), w, h, 10);
+    const mask = canny(gradient([toGray(rectImage(w, h, 10, 10, 30, 30))], w, h), w, h, 10);
     expect(mask[20 * w + 20]).toBe(0); // center of the rectangle
     expect(mask[2 * w + 2]).toBe(0); // background
     // some edge pixel on the left border column
@@ -61,13 +61,16 @@ describe('dilate', () => {
 });
 
 describe('lineArt', () => {
-  it('blanks text regions in hide mode, leaving only box outlines', () => {
-    const w = 100, h = 140;
-    const img = rectImage(w, h, 20, 100, 80, 120); // dark block inside the lower text region
-    const hidden = lineArt(img, { ...DEFAULT_LINE_ART, textMode: 'hide' });
-    const edges = lineArt(img, { ...DEFAULT_LINE_ART, textMode: 'edges' });
-    expect(edges[100 * w + 20] || edges[100 * w + 19]).toBe(1);
-    expect(hidden[110 * w + 50]).toBe(0);
-    expect(hidden[100 * w + 20]).toBe(0);
+  it('finds borders between colors of equal brightness', () => {
+    // red and green halves with nearly identical luminance
+    const w = 40, h = 40;
+    const data = new Uint8ClampedArray(w * h * 4);
+    for (let i = 0; i < w * h; i++) data.set(i % w < 20 ? [200, 60, 60, 255] : [60, 135, 60, 255], i * 4);
+    const img = { width: w, height: h, data };
+    const gray = toGray(img);
+    expect(Math.abs(gray[0] - gray[w - 1])).toBeLessThan(5);
+    const mask = lineArt(img, { ...DEFAULT_LINE_ART, minSpeckle: 0, lineWidth: 1 });
+    expect(mask[20 * w + 19] || mask[20 * w + 20]).toBe(1);
+    expect(mask[20 * w + 5]).toBe(0);
   });
 });

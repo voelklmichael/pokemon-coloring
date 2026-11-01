@@ -9,37 +9,53 @@
   <body>
     <header>
       <h1>Pokémon Coloring Cards</h1>
-      <p>Turn trading card images into black-and-white cards to print and color.</p>
+      <p>Turn trading cards into black-and-white cards to print and color.</p>
     </header>
 
     <main>
       <section class="panel" id="import">
         <h2><span class="step">1</span> Add cards</h2>
-        <div id="dropzone" tabindex="0">
-          <p>
-            Drop card images here, or
-            <label class="button">choose files<input id="file-input" type="file" accept="image/*" multiple hidden /></label>
-          </p>
-          <p class="hint">
-            Tip: in another tab, right-click a card image → <em>Copy image</em>, then press <kbd>Ctrl</kbd>+<kbd>V</kbd> on this page.
-          </p>
-        </div>
-        <label for="url-input">Image links (one per line)</label>
-        <textarea id="url-input" rows="3" placeholder="https://images.pokemontcg.io/sv1/1_hires.png"></textarea>
-        <button id="url-add" class="button">Add from links</button>
+        <form id="search-form" class="row">
+          <input id="search-input" type="search" placeholder="Pokémon name, e.g. Pikachu" aria-label="Pokémon name" required />
+          <button class="button primary" type="submit">Search</button>
+        </form>
+        <p id="search-status" class="hint" aria-live="polite"></p>
+        <div id="search-results"></div>
+        <button id="search-more" class="button" hidden>Show more</button>
+
         <details>
-          <summary>Advanced: CORS proxy</summary>
+          <summary>Other ways: links, files, clipboard</summary>
+          <div id="dropzone" tabindex="0">
+            <p>
+              Drop card images here, or
+              <label class="button">choose files<input id="file-input" type="file" accept="image/*" multiple hidden /></label>
+            </p>
+            <p class="hint">Or copy an image in another tab and press <kbd>Ctrl</kbd>+<kbd>V</kbd> on this page.</p>
+          </div>
+          <label for="url-input">Card links (one per line)</label>
+          <textarea id="url-input" rows="3" placeholder="https://images.pokemontcg.io/sv3pt5/25_hires.png"></textarea>
+          <button id="url-add" class="button">Add from links</button>
           <p class="hint">
-            Some websites block loading their images from other pages. A proxy can work around that.
-            Use <code>{url}</code> as placeholder, e.g. <code>https://my-proxy.example/?url={url}</code>.
+            Links to <a href="https://tcgdex.dev" target="_blank" rel="noopener">TCGdex</a> or pokemontcg.io images include
+            the card's layout (attacks, energy, weakness…). For other images and uploads, check the layout under
+            <em>Layout</em> on each card.
           </p>
+          <label for="proxy-input">CORS proxy for websites that block loading their images (optional, <code>{url}</code> = image link)</label>
           <input id="proxy-input" type="url" placeholder="https://my-proxy.example/?url={url}" />
         </details>
         <ul id="messages" aria-live="polite"></ul>
       </section>
 
       <section class="panel" id="settings">
-        <h2><span class="step">2</span> Adjust lines</h2>
+        <h2><span class="step">2</span> Adjust</h2>
+        <div class="row">
+          <label>Card style
+            <select id="layout-mode">
+              <option value="template">Base layout, text removed</option>
+              <option value="original">Outlines of the original card</option>
+            </select>
+          </label>
+        </div>
         <div class="presets">
           <button class="button" data-preset="simple">Simple</button>
           <button class="button" data-preset="detailed">Detailed</button>
@@ -47,18 +63,15 @@
         </div>
         <div class="sliders">
           <label>Smoothing <input type="range" data-setting="blur" min="0" max="5" step="1" /><output></output></label>
-          <label>Detail <input type="range" data-setting="detail" min="1" max="20" step="1" /><output></output></label>
+          <label>Detail <input type="range" data-setting="detail" min="1" max="25" step="1" /><output></output></label>
           <label>Remove specks <input type="range" data-setting="minSpeckle" min="0" max="300" step="10" /><output></output></label>
           <label>Line width <input type="range" data-setting="lineWidth" min="1" max="11" step="2" /><output></output></label>
         </div>
-        <label class="inline">
-          <input type="checkbox" id="hide-text" /> Remove card text (leaves empty boxes)
-        </label>
       </section>
 
       <section class="panel" id="cards">
         <h2><span class="step">3</span> Cards <span id="card-count" class="count"></span></h2>
-        <p id="empty-hint" class="hint">No cards yet — add some above.</p>
+        <p id="empty-hint" class="hint">No cards yet — search for a Pokémon above.</p>
         <div id="card-grid"></div>
       </section>
 
@@ -83,8 +96,9 @@
 
     <footer>
       <p>
-        Everything runs in your browser; images are not uploaded anywhere.
-        Pokémon and card images are © Nintendo / Creatures / GAME FREAK / The Pokémon Company — for private use only.
+        Card data and images from <a href="https://tcgdex.dev" target="_blank" rel="noopener">TCGdex</a> and pokemontcg.io.
+        Everything else runs in your browser. Pokémon and card images are © Nintendo / Creatures / GAME FREAK /
+        The Pokémon Company — for private use only.
       </p>
     </footer>
 
@@ -92,13 +106,35 @@
       <article class="card">
         <div class="card-images">
           <canvas class="original" title="Original"></canvas>
-          <canvas class="lineart" title="Coloring version"></canvas>
+          <canvas class="output" title="Coloring version"></canvas>
         </div>
         <div class="card-meta">
           <span class="card-name"></span>
           <label>Copies <input class="copies" type="number" min="0" max="18" value="1" /></label>
           <button class="remove" title="Remove card" aria-label="Remove card">✕</button>
         </div>
+        <details class="structure">
+          <summary>Layout <span class="structure-source"></span></summary>
+          <div class="structure-grid">
+            <label>Stage
+              <select data-field="stage">
+                <option value="basic">Basic</option>
+                <option value="stage1">Stage 1</option>
+                <option value="stage2">Stage 2</option>
+              </select>
+            </label>
+            <label>Type <select data-field="type" class="energy-select"></select></label>
+            <label>Abilities <input data-field="abilities" type="number" min="0" max="2" /></label>
+            <label>Retreat <input data-field="retreat" type="number" min="0" max="5" /></label>
+            <label>Weakness <select data-field="weakness" class="energy-select"></select></label>
+            <label>Resistance <select data-field="resistance" class="energy-select"></select></label>
+            <label class="wide">Attack costs <input data-field="attacks" placeholder="e.g. L, LLC" /></label>
+          </div>
+          <p class="hint">
+            One group of letters per attack: G grass, R fire, W water, L lightning, P psychic, F fighting,
+            D darkness, M metal, Y fairy, N dragon, C colorless.
+          </p>
+        </details>
       </article>
     </template>
 

@@ -1,15 +1,18 @@
 # Pokémon Coloring Cards
 
-Turn Pokémon TCG card images into black-and-white line art and print them at real card
-size (63 × 88 mm, 9 per A4/Letter page) for kids to color.
+Turn Pokémon TCG cards into black-and-white coloring cards and print them at real card
+size (63 × 88 mm, 9 per A4/Letter page) for kids to color. Every card gets the same clean
+base layout (text and numbers removed, energy symbols as icons); only the artwork is
+converted to line art.
 
-Runs entirely in the browser — hosted on GitHub Pages, no backend, images never leave your machine.
+Runs entirely in the browser, hosted on GitHub Pages. Card data and images come from
+[TCGdex](https://tcgdex.dev) (and pokemontcg.io for its links).
 
 ## Use
 
-1. Add cards: paste image links (e.g. `https://images.pokemontcg.io/sv1/1_hires.png`),
-   upload/drop files, or copy an image in another tab and press Ctrl+V.
-2. Adjust the lines (presets or sliders). Card text is removed by default.
+1. Search for a Pokémon and click the cards you want. Alternatively paste card links,
+   upload/drop images or paste from the clipboard (then check each card's *Layout*).
+2. Adjust the lines (presets or sliders).
 3. Set copies per card, choose paper, **Download PDF**.
 4. Print at **100% / "Actual size"**. Page 1 has a 50 mm line to check the scale.
 
